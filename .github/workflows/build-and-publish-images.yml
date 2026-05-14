@@ -1,0 +1,113 @@
+name: Build and publish images
+
+on:
+  push:
+    branches:
+      - main
+      - preview
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: images-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build ${{ matrix.image }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: frontend
+            context: .
+            dockerfile: apps/web/Dockerfile.web
+            build_args: |
+              VITE_API_BASE_URL=
+              VITE_ADMIN_BASE_URL=
+              VITE_ADMIN_BASE_PATH=/god-mode
+              VITE_SPACE_BASE_URL=
+              VITE_SPACE_BASE_PATH=/spaces
+              VITE_LIVE_BASE_URL=
+              VITE_LIVE_BASE_PATH=/live
+              VITE_WEB_BASE_URL=
+          - image: admin
+            context: .
+            dockerfile: apps/admin/Dockerfile.admin
+            build_args: |
+              VITE_API_BASE_URL=
+              VITE_API_BASE_PATH=/api
+              VITE_ADMIN_BASE_URL=
+              VITE_ADMIN_BASE_PATH=/god-mode
+              VITE_SPACE_BASE_URL=
+              VITE_SPACE_BASE_PATH=/spaces
+              VITE_LIVE_BASE_URL=
+              VITE_LIVE_BASE_PATH=/live
+              VITE_WEB_BASE_URL=
+          - image: space
+            context: .
+            dockerfile: apps/space/Dockerfile.space
+            build_args: |
+              VITE_API_BASE_URL=
+              VITE_API_BASE_PATH=/api
+              VITE_ADMIN_BASE_URL=
+              VITE_ADMIN_BASE_PATH=/god-mode
+              VITE_SPACE_BASE_URL=
+              VITE_SPACE_BASE_PATH=/spaces
+              VITE_LIVE_BASE_URL=
+              VITE_LIVE_BASE_PATH=/live
+              VITE_WEB_BASE_URL=
+          - image: live
+            context: .
+            dockerfile: apps/live/Dockerfile.live
+            build_args: ""
+          - image: backend
+            context: apps/api
+            dockerfile: apps/api/Dockerfile.api
+            build_args: ""
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}/${{ matrix.image }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=tag
+            type=sha,prefix=sha-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and publish
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: ${{ matrix.build_args }}
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}

@@ -1,0 +1,334 @@
+version: "3.8"
+
+x-placement: &placement
+  constraints:
+    - node.hostname == ${STATEFUL_NODE_HOSTNAME:?set STATEFUL_NODE_HOSTNAME}
+
+x-ui-env: &ui-env
+  VITE_API_BASE_URL: ""
+  VITE_API_BASE_PATH: /api
+  VITE_ADMIN_BASE_URL: ""
+  VITE_ADMIN_BASE_PATH: /god-mode
+  VITE_SPACE_BASE_URL: ""
+  VITE_SPACE_BASE_PATH: /spaces
+  VITE_LIVE_BASE_URL: ""
+  VITE_LIVE_BASE_PATH: /live
+  VITE_WEB_BASE_URL: ""
+
+x-db-env: &db-env
+  PGHOST: ${PGHOST:-plane-db}
+  PGDATABASE: ${PGDATABASE:-plane}
+  POSTGRES_USER: ${POSTGRES_USER:-plane}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+  POSTGRES_DB: ${POSTGRES_DB:-plane}
+  POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+  PGDATA: ${PGDATA:-/var/lib/postgresql/data}
+
+x-redis-env: &redis-env
+  REDIS_HOST: ${REDIS_HOST:-plane-redis}
+  REDIS_PORT: ${REDIS_PORT:-6379}
+  REDIS_URL: ${REDIS_URL:-redis://plane-redis:6379/}
+
+x-minio-env: &minio-env
+  MINIO_ROOT_USER: ${AWS_ACCESS_KEY_ID:?set AWS_ACCESS_KEY_ID}
+  MINIO_ROOT_PASSWORD: ${AWS_SECRET_ACCESS_KEY:?set AWS_SECRET_ACCESS_KEY}
+
+x-aws-s3-env: &aws-s3-env
+  AWS_REGION: ${AWS_REGION:-us-east-1}
+  AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:?set AWS_ACCESS_KEY_ID}
+  AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:?set AWS_SECRET_ACCESS_KEY}
+  AWS_S3_ENDPOINT_URL: ${AWS_S3_ENDPOINT_URL:-http://plane-minio:9000}
+  AWS_S3_BUCKET_NAME: ${AWS_S3_BUCKET_NAME:-uploads}
+
+x-mq-env: &mq-env
+  RABBITMQ_HOST: ${RABBITMQ_HOST:-plane-mq}
+  RABBITMQ_PORT: ${RABBITMQ_PORT:-5672}
+  RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-plane}
+  RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?set RABBITMQ_PASSWORD}
+  RABBITMQ_DEFAULT_VHOST: ${RABBITMQ_VHOST:-plane}
+  RABBITMQ_VHOST: ${RABBITMQ_VHOST:-plane}
+
+x-live-env: &live-env
+  API_BASE_URL: ${API_BASE_URL:-http://api:8000}
+  CORS_ALLOWED_ORIGINS: ${PLANE_BASE_URL:?set PLANE_BASE_URL}
+  LIVE_BASE_URL: ${PLANE_BASE_URL:?set PLANE_BASE_URL}
+  LIVE_BASE_PATH: /live
+  LIVE_SERVER_SECRET_KEY: ${LIVE_SERVER_SECRET_KEY:?set LIVE_SERVER_SECRET_KEY}
+
+x-app-env: &app-env
+  WEB_URL: ${PLANE_BASE_URL:?set PLANE_BASE_URL}
+  APP_BASE_URL: ${PLANE_BASE_URL:?set PLANE_BASE_URL}
+  ADMIN_BASE_URL: ${PLANE_BASE_URL:?set PLANE_BASE_URL}
+  ADMIN_BASE_PATH: /god-mode/
+  SPACE_BASE_URL: ${PLANE_BASE_URL:?set PLANE_BASE_URL}
+  SPACE_BASE_PATH: /spaces/
+  LIVE_BASE_URL: ${PLANE_BASE_URL:?set PLANE_BASE_URL}
+  LIVE_BASE_PATH: /live/
+  DEBUG: ${DEBUG:-0}
+  CORS_ALLOWED_ORIGINS: ${PLANE_BASE_URL:?set PLANE_BASE_URL}
+  GUNICORN_WORKERS: ${GUNICORN_WORKERS:-1}
+  USE_MINIO: ${USE_MINIO:-1}
+  DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL}
+  SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY}
+  AMQP_URL: ${AMQP_URL:?set AMQP_URL}
+  API_KEY_RATE_LIMIT: ${API_KEY_RATE_LIMIT:-60/minute}
+  MINIO_ENDPOINT_SSL: ${MINIO_ENDPOINT_SSL:-0}
+  LIVE_SERVER_SECRET_KEY: ${LIVE_SERVER_SECRET_KEY:?set LIVE_SERVER_SECRET_KEY}
+  FILE_SIZE_LIMIT: ${FILE_SIZE_LIMIT:-5242880}
+
+x-traefik-common: &traefik-common
+  traefik.enable: "true"
+  traefik.swarm.network: traefik-public
+
+services:
+  web:
+    image: ${IMAGE_REGISTRY:-ghcr.io/brasalabs6/plane}/frontend:${APP_RELEASE:-main}
+    environment:
+      <<: *ui-env
+    networks:
+      - internal
+      - traefik-public
+    deploy:
+      replicas: ${WEB_REPLICAS:-1}
+      placement: *placement
+      restart_policy:
+        condition: any
+      labels:
+        <<: *traefik-common
+        traefik.http.routers.plane-web.entrypoints: websecure
+        traefik.http.routers.plane-web.middlewares: security-headers@file
+        traefik.http.routers.plane-web.priority: "1"
+        traefik.http.routers.plane-web.rule: Host(`${PLANE_HOST:?set PLANE_HOST}`)
+        traefik.http.routers.plane-web.service: plane-web
+        traefik.http.routers.plane-web.tls: "true"
+        traefik.http.routers.plane-web.tls.certresolver: le
+        traefik.http.services.plane-web.loadbalancer.server.port: "3000"
+
+  space:
+    image: ${IMAGE_REGISTRY:-ghcr.io/brasalabs6/plane}/space:${APP_RELEASE:-main}
+    environment:
+      <<: *ui-env
+    networks:
+      - internal
+      - traefik-public
+    deploy:
+      replicas: ${SPACE_REPLICAS:-1}
+      placement: *placement
+      restart_policy:
+        condition: any
+      labels:
+        <<: *traefik-common
+        traefik.http.routers.plane-space.entrypoints: websecure
+        traefik.http.routers.plane-space.middlewares: security-headers@file
+        traefik.http.routers.plane-space.priority: "100"
+        traefik.http.routers.plane-space.rule: Host(`${PLANE_HOST:?set PLANE_HOST}`) && PathPrefix(`/spaces`)
+        traefik.http.routers.plane-space.service: plane-space
+        traefik.http.routers.plane-space.tls: "true"
+        traefik.http.routers.plane-space.tls.certresolver: le
+        traefik.http.services.plane-space.loadbalancer.server.port: "3000"
+
+  admin:
+    image: ${IMAGE_REGISTRY:-ghcr.io/brasalabs6/plane}/admin:${APP_RELEASE:-main}
+    environment:
+      <<: *ui-env
+    networks:
+      - internal
+      - traefik-public
+    deploy:
+      replicas: ${ADMIN_REPLICAS:-1}
+      placement: *placement
+      restart_policy:
+        condition: any
+      labels:
+        <<: *traefik-common
+        traefik.http.routers.plane-admin.entrypoints: websecure
+        traefik.http.routers.plane-admin.middlewares: security-headers@file
+        traefik.http.routers.plane-admin.priority: "100"
+        traefik.http.routers.plane-admin.rule: Host(`${PLANE_HOST:?set PLANE_HOST}`) && PathPrefix(`/god-mode`)
+        traefik.http.routers.plane-admin.service: plane-admin
+        traefik.http.routers.plane-admin.tls: "true"
+        traefik.http.routers.plane-admin.tls.certresolver: le
+        traefik.http.services.plane-admin.loadbalancer.server.port: "3000"
+
+  live:
+    image: ${IMAGE_REGISTRY:-ghcr.io/brasalabs6/plane}/live:${APP_RELEASE:-main}
+    environment:
+      <<: [*live-env, *redis-env]
+    networks:
+      - internal
+      - traefik-public
+    deploy:
+      replicas: ${LIVE_REPLICAS:-1}
+      placement: *placement
+      restart_policy:
+        condition: any
+      labels:
+        <<: *traefik-common
+        traefik.http.routers.plane-live.entrypoints: websecure
+        traefik.http.routers.plane-live.middlewares: security-headers@file
+        traefik.http.routers.plane-live.priority: "100"
+        traefik.http.routers.plane-live.rule: Host(`${PLANE_HOST:?set PLANE_HOST}`) && PathPrefix(`/live`)
+        traefik.http.routers.plane-live.service: plane-live
+        traefik.http.routers.plane-live.tls: "true"
+        traefik.http.routers.plane-live.tls.certresolver: le
+        traefik.http.services.plane-live.loadbalancer.server.port: "3000"
+
+  api:
+    image: ${IMAGE_REGISTRY:-ghcr.io/brasalabs6/plane}/backend:${APP_RELEASE:-main}
+    command: ./bin/docker-entrypoint-api.sh
+    environment:
+      <<: [*app-env, *db-env, *redis-env, *minio-env, *aws-s3-env]
+    volumes:
+      - type: bind
+        source: ${PLANE_DATA_ROOT:-/opt/plane}/logs/api
+        target: /code/plane/logs
+    networks:
+      - internal
+      - traefik-public
+    deploy:
+      replicas: ${API_REPLICAS:-1}
+      placement: *placement
+      restart_policy:
+        condition: any
+      labels:
+        <<: *traefik-common
+        traefik.http.routers.plane-api.entrypoints: websecure
+        traefik.http.routers.plane-api.middlewares: security-headers@file
+        traefik.http.routers.plane-api.priority: "100"
+        traefik.http.routers.plane-api.rule: Host(`${PLANE_HOST:?set PLANE_HOST}`) && (PathPrefix(`/api`) || PathPrefix(`/auth`) || PathPrefix(`/static`))
+        traefik.http.routers.plane-api.service: plane-api
+        traefik.http.routers.plane-api.tls: "true"
+        traefik.http.routers.plane-api.tls.certresolver: le
+        traefik.http.services.plane-api.loadbalancer.server.port: "8000"
+
+  worker:
+    image: ${IMAGE_REGISTRY:-ghcr.io/brasalabs6/plane}/backend:${APP_RELEASE:-main}
+    command: ./bin/docker-entrypoint-worker.sh
+    environment:
+      <<: [*app-env, *db-env, *redis-env, *minio-env, *aws-s3-env]
+    volumes:
+      - type: bind
+        source: ${PLANE_DATA_ROOT:-/opt/plane}/logs/worker
+        target: /code/plane/logs
+    networks:
+      - internal
+    deploy:
+      replicas: ${WORKER_REPLICAS:-1}
+      placement: *placement
+      restart_policy:
+        condition: any
+
+  beat-worker:
+    image: ${IMAGE_REGISTRY:-ghcr.io/brasalabs6/plane}/backend:${APP_RELEASE:-main}
+    command: ./bin/docker-entrypoint-beat.sh
+    environment:
+      <<: [*app-env, *db-env, *redis-env, *minio-env, *aws-s3-env]
+    volumes:
+      - type: bind
+        source: ${PLANE_DATA_ROOT:-/opt/plane}/logs/beat-worker
+        target: /code/plane/logs
+    networks:
+      - internal
+    deploy:
+      replicas: ${BEAT_WORKER_REPLICAS:-1}
+      placement: *placement
+      restart_policy:
+        condition: any
+
+  migrator:
+    image: ${IMAGE_REGISTRY:-ghcr.io/brasalabs6/plane}/backend:${APP_RELEASE:-main}
+    command: ./bin/docker-entrypoint-migrator.sh
+    environment:
+      <<: [*app-env, *db-env, *redis-env, *minio-env, *aws-s3-env]
+    volumes:
+      - type: bind
+        source: ${PLANE_DATA_ROOT:-/opt/plane}/logs/migrator
+        target: /code/plane/logs
+    networks:
+      - internal
+    deploy:
+      replicas: 1
+      placement: *placement
+      restart_policy:
+        condition: on-failure
+
+  plane-db:
+    image: postgres:15.7-alpine
+    command: postgres -c 'max_connections=1000'
+    environment:
+      <<: *db-env
+    volumes:
+      - type: bind
+        source: ${PLANE_DATA_ROOT:-/opt/plane}/data/postgres
+        target: /var/lib/postgresql/data
+    networks:
+      - internal
+    deploy:
+      replicas: 1
+      placement: *placement
+      restart_policy:
+        condition: any
+
+  plane-redis:
+    image: valkey/valkey:7.2.11-alpine
+    volumes:
+      - type: bind
+        source: ${PLANE_DATA_ROOT:-/opt/plane}/data/redis
+        target: /data
+    networks:
+      - internal
+    deploy:
+      replicas: 1
+      placement: *placement
+      restart_policy:
+        condition: any
+
+  plane-mq:
+    image: rabbitmq:3.13.6-management-alpine
+    environment:
+      <<: *mq-env
+    volumes:
+      - type: bind
+        source: ${PLANE_DATA_ROOT:-/opt/plane}/data/rabbitmq
+        target: /var/lib/rabbitmq
+    networks:
+      - internal
+    deploy:
+      replicas: 1
+      placement: *placement
+      restart_policy:
+        condition: any
+
+  plane-minio:
+    image: minio/minio:latest
+    command: server /export --console-address ":9090"
+    environment:
+      <<: *minio-env
+    volumes:
+      - type: bind
+        source: ${PLANE_DATA_ROOT:-/opt/plane}/data/minio
+        target: /export
+    networks:
+      - internal
+      - traefik-public
+    deploy:
+      replicas: 1
+      placement: *placement
+      restart_policy:
+        condition: any
+      labels:
+        <<: *traefik-common
+        traefik.http.routers.plane-uploads.entrypoints: websecure
+        traefik.http.routers.plane-uploads.middlewares: security-headers@file
+        traefik.http.routers.plane-uploads.priority: "100"
+        traefik.http.routers.plane-uploads.rule: Host(`${PLANE_HOST:?set PLANE_HOST}`) && PathPrefix(`/uploads`)
+        traefik.http.routers.plane-uploads.service: plane-uploads
+        traefik.http.routers.plane-uploads.tls: "true"
+        traefik.http.routers.plane-uploads.tls.certresolver: le
+        traefik.http.services.plane-uploads.loadbalancer.server.port: "9000"
+
+networks:
+  internal:
+    driver: overlay
+  traefik-public:
+    external: true
